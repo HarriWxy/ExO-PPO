@@ -1,0 +1,104 @@
+import tensorflow as tf
+from keras import Model
+from keras.layers import  Dense, Activation,LayerNormalization,Conv2D,Flatten,AveragePooling2D,MaxPool2D,Layer
+# import os 
+
+class ImagePro(Layer):
+    def __init__(self):
+        super().__init__() 
+        # resnet
+        self.c_1_1 = Conv2D(filters=32, kernel_size=8,strides=4, padding='valid',activation='elu',input_shape=(4,84,84),
+                            kernel_initializer='he_uniform',data_format="channels_first")
+        # self.p_1 = MaxPool2D(pool_size=(2, 2), strides=2, padding='valid',data_format="channels_first")  # 池化层
+        # self.l_1 =LayerNormalization(0)
+        self.c_2_1 = Conv2D(filters=64, kernel_size=4,strides=2, padding='valid',activation='elu',
+                            kernel_initializer='he_uniform',data_format="channels_first")
+        # self.c_2_2 = Conv2D(filters=32, kernel_size=4,strides=1, padding='same',kernel_initializer='he_uniform',data_format="channels_first")
+        # self.a_2 = Activation('elu')
+        # self.l_2 = Conv2D(filters=64, kernel_size=1, padding='valid',strides=2,kernel_initializer='he_uniform',activation='elu',data_format="channels_first")
+
+        self.c_3_1 = Conv2D(filters=64, kernel_size=3,strides=1, padding='valid',activation='elu',data_format="channels_first",
+                            kernel_initializer='he_uniform')
+        self.l_4 = Flatten()
+
+
+    # @tf.function
+    def call(self,x):
+        x = x / 255.
+        x = self.c_1_1(x)
+        # x = self.p_1(x)
+        # x = self.l_1(x)
+        x = self.c_2_1(x)
+        # x = self.c_2_2(x1)
+        # x = self.a_2(x+x1)
+        # x = self.l_2(x)
+        x = self.c_3_1(x)
+        x = self.l_4(x)
+        return x
+
+class Actor_val(Model): 
+    # 评估网络,输出动作
+    def __init__(self, actions):
+        super().__init__() 
+        # resnet
+        # self.f1 = Dense(256, activation='elu',kernel_initializer='he_uniform')
+        self.ima_net = ImagePro()
+        self.f4 = Dense(512, activation='elu',kernel_initializer='he_uniform')
+        self.f41 = Dense(32, activation='elu',kernel_initializer='he_uniform')
+        # self.f31 = Dense(64, activation=None,kernel_initializer='he_uniform')
+        self.f2 = Dense(actions, activation='softmax',kernel_initializer='he_uniform') # 输出层
+        # self.acti1 = Activation("elu")
+        # 加载网络
+        self.checkpoint_save_path = "./disTD/model1/actor"
+        # if os.path.exists(self.checkpoint_save_path + '.index'):
+        #     print('-------------load the model-----------------')
+        #     self.load_weights(self.checkpoint_save_path)
+        # else:
+        #     print('-------------train new model-----------------')
+    @tf.function
+    def call(self,x):
+        x = self.ima_net(x)
+        x = self.f4(x)
+        # x1 = self.f31(x)
+        # x1 = self.acti1(x+x1)
+        x1 = self.f41(x)
+        y = self.f2(x1)
+        return y
+
+    def save_wei(self):
+        # 保存网络
+        self.save_weights(self.checkpoint_save_path)
+
+class Critic_val(Model): 
+    # 评估网络
+    def __init__(self, actions):
+        super().__init__() 
+        # self.f1 = Dense(256, activation='elu',kernel_initializer='he_uniform')
+        self.ima_net = ImagePro()
+        # self.f31 = Dense(64, activation=None,kernel_initializer='he_uniform')
+        self.f4 = Dense(512, activation='elu',kernel_initializer='he_uniform')
+        self.f42 = Dense(32, activation='elu',kernel_initializer='he_uniform')
+        self.f2 = Dense(actions, activation=None,kernel_initializer='he_uniform')
+        # self.acti1 = Activation("elu")
+        # 加载网络
+        # self.checkpoint_save_path = "./disTD/model1/critic"
+        # if os.path.exists(self.checkpoint_save_path + '.index'):
+        #     print('-------------load the model-----------------')
+        #     self.load_weights(self.checkpoint_save_path)
+        # else:
+        #     print('-------------train new model-----------------')
+    @tf.function
+    def call(self,x):
+        x=self.ima_net(x)
+        x=self.f4(x)
+        # x1=self.f31(x)
+        # x1=self.acti1(x+x1)
+        x1=self.f42(x)
+        y=self.f2(x1)
+        return y
+
+    # def save_wei(self):
+    #     # 保存网络
+    #     self.save_weights(self.checkpoint_save_path)
+
+
