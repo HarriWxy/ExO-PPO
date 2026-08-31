@@ -45,6 +45,41 @@ class FlowObjectiveTests(unittest.TestCase):
         self.assertAlmostEqual(float(result["ratio"]), 1.0, places=5)
         self.assertAlmostEqual(float(result["recent_ratio"]), 1.0, places=5)
 
+    def test_policy_broadcasts_singleton_times_and_condition_masks(self) -> None:
+        observation = tf.random.normal((4, 3))
+        state = tf.random.normal((4, 2))
+        self.policy.velocity_head.kernel.assign(
+            tf.ones_like(self.policy.velocity_head.kernel)
+        )
+        start_time = tf.fill((4, 1), tf.constant(0.25, tf.float32))
+        end_time = tf.fill((4, 1), tf.constant(0.75, tf.float32))
+        condition_mask = tf.zeros((4, 1), tf.float32)
+        reference = self.policy.velocity(
+            observation,
+            state,
+            start_time,
+            end_time,
+            condition_mask=condition_mask,
+        )
+
+        for broadcast_start, broadcast_end, broadcast_mask in (
+            (0.25, 0.75, 0.0),
+            (tf.constant([[0.25]]), tf.constant([[0.75]]), tf.constant([[0.0]])),
+        ):
+            actual = self.policy.velocity(
+                observation,
+                state,
+                broadcast_start,
+                broadcast_end,
+                condition_mask=broadcast_mask,
+            )
+            self.assertEqual(tuple(actual.shape), (4, 2))
+            self.assertTrue(bool(tf.reduce_all(tf.math.is_finite(actual))))
+            self.assertTrue(bool(tf.reduce_all(tf.abs(actual - reference) < 1e-6)))
+
+        interval_result = self.policy.interval_mean(observation, state, 0.25)
+        self.assertEqual(tuple(interval_result.shape), (4, 2))
+
     def test_recent_ratio_stays_fixed_when_online_policy_moves(self) -> None:
         from flow.objectives import direct_ratio_exo_loss
 

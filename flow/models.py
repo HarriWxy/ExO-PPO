@@ -22,6 +22,17 @@ import tensorflow as tf
 LOG_TWO_PI = math.log(2.0 * math.pi)
 
 
+def _batch_column(
+    value: tf.Tensor | float,
+    batch_size: tf.Tensor,
+    dtype: tf.dtypes.DType,
+) -> tf.Tensor:
+    """Convert a scalar, single-element, or per-batch value to ``[B, 1]``."""
+
+    column = tf.reshape(tf.cast(value, dtype), (-1, 1))
+    return tf.broadcast_to(column, tf.stack([batch_size, 1]))
+
+
 @dataclass
 class PolicySample:
     """A policy sample and the variables required for a direct ratio."""
@@ -102,8 +113,9 @@ class IntervalFlowPolicy(tf.keras.Model):
         if condition_mask is None:
             condition_mask = tf.ones((batch_size, 1), dtype=context.dtype)
         else:
-            condition_mask = tf.cast(condition_mask, context.dtype)
-            condition_mask = tf.reshape(condition_mask, (batch_size, 1))
+            condition_mask = _batch_column(
+                condition_mask, batch_size, context.dtype
+            )
         null_context = tf.broadcast_to(self.null_context[None, :], tf.shape(context))
         return condition_mask * context + (1.0 - condition_mask) * null_context
 
@@ -125,8 +137,8 @@ class IntervalFlowPolicy(tf.keras.Model):
         observation = tf.cast(observation, tf.float32)
         state = tf.cast(state, tf.float32)
         batch_size = tf.shape(state)[0]
-        start_time = tf.reshape(tf.cast(start_time, state.dtype), (batch_size, 1))
-        end_time = tf.reshape(tf.cast(end_time, state.dtype), (batch_size, 1))
+        start_time = _batch_column(start_time, batch_size, state.dtype)
+        end_time = _batch_column(end_time, batch_size, state.dtype)
         interval = end_time - start_time
         time_features = tf.concat(
             [
@@ -157,7 +169,7 @@ class IntervalFlowPolicy(tf.keras.Model):
         """Generate the terminal mean with one interval-flow evaluation."""
 
         batch_size = tf.shape(flow_init)[0]
-        flow_start = tf.reshape(tf.cast(flow_start, tf.float32), (batch_size, 1))
+        flow_start = _batch_column(flow_start, batch_size, tf.float32)
         end_time = tf.ones_like(flow_start)
         average_velocity = self.velocity(
             observation,
@@ -257,7 +269,7 @@ class IntervalFlowPolicy(tf.keras.Model):
         if flow_start is None:
             flow_start = tf.zeros((batch_size, 1), dtype=tf.float32)
         else:
-            flow_start = tf.reshape(tf.cast(flow_start, tf.float32), (batch_size, 1))
+            flow_start = _batch_column(flow_start, batch_size, tf.float32)
 
         mean = self.interval_mean(
             observation,

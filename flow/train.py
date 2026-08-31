@@ -46,7 +46,7 @@ from flow.objectives import direct_ratio_exo_loss, recent_policy_ofp_losses
 
 @dataclass(frozen=True)
 class TrainConfig:
-    env_id: str = "Walker2d-v5"
+    env_id: str = "HalfCheetah-v5"
     seed: int = 0
     total_steps: int = 1_000_000
     num_envs: int = 4
