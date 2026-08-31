@@ -153,6 +153,22 @@ python -m flow.torch_train \
   --eval-every-rollouts 999
 ```
 
+如果已安装 EnvPool，可以将采样后端切换为 C++ 批量环境池。这里固定
+`batch_size=num_envs` 使用同步批量 API，保持 GAE 和 replay 的环境行顺序：
+
+```bash
+python -m flow.torch_train \
+  --env-id Walker2d-v5 \
+  --env-backend envpool \
+  --envpool-num-threads 8 \
+  --device auto
+```
+
+EnvPool 需要单独安装（`pip install envpool`），并且环境 ID 必须出现在
+`envpool.list_all_envs()` 中；不支持的任务会在启动时给出明确错误。异步
+`send/recv` 暂未接入，因为它返回乱序的 `env_id`，需要改变当前固定批次的
+replay/GAE 数据布局。
+
 正式实验示例：
 
 ```bash

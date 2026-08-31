@@ -45,6 +45,35 @@ class TorchFlowObjectiveTests(unittest.TestCase):
         self.assertAlmostEqual(float(result["ratio"]), 1.0, places=5)
         self.assertAlmostEqual(float(result["recent_ratio"]), 1.0, places=5)
 
+    def test_policy_broadcasts_singleton_times_and_condition_masks(self) -> None:
+        observation = torch.randn((4, 3))
+        state = torch.randn((4, 2))
+        with torch.no_grad():
+            self.policy.velocity_head.weight.fill_(1.0)
+        reference = self.policy.velocity(
+            observation,
+            state,
+            torch.full((4, 1), 0.25),
+            torch.full((4, 1), 0.75),
+            condition_mask=torch.zeros((4, 1)),
+        )
+        for broadcast_start, broadcast_end, broadcast_mask in (
+            (0.25, 0.75, 0.0),
+            (torch.tensor([[0.25]]), torch.tensor([[0.75]]), torch.tensor([[0.0]])),
+        ):
+            actual = self.policy.velocity(
+                observation,
+                state,
+                broadcast_start,
+                broadcast_end,
+                condition_mask=broadcast_mask,
+            )
+            self.assertEqual(tuple(actual.shape), (4, 2))
+            self.assertTrue(torch.isfinite(actual).all())
+            self.assertTrue(torch.allclose(actual, reference, atol=1e-6))
+        interval_result = self.policy.interval_mean(observation, state, 0.25)
+        self.assertEqual(tuple(interval_result.shape), (4, 2))
+
     def test_recent_ratio_stays_fixed_when_online_policy_moves(self) -> None:
         from flow.torch_objectives import direct_ratio_exo_loss
 

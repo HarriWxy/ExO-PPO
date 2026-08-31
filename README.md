@@ -113,6 +113,9 @@ python -m flow.train --env-id Walker2d-v5
 
 # PyTorch：同一方案，自动选择 CUDA（无 CUDA 时回退 CPU）
 python -m flow.torch_train --env-id Walker2d-v5 --device auto
+
+# PyTorch：使用 EnvPool C++ 批量并行采样
+python -m flow.torch_train --env-id Walker2d-v5 --env-backend envpool --device auto
 ```
 
 几个常用脚本及其默认环境如下：

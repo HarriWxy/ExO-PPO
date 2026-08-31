@@ -529,17 +529,17 @@ def collect_rollout(
     for _ in range(config.rollout_steps):
         observation_tensor = tf.convert_to_tensor(observation, tf.float32)
         batch_size = observation.shape[0]
-        pure_noise = tf.random.normal((batch_size, trainer.policy.action_dim))
+        pure_noise = np.random.normal(size=(batch_size, trainer.policy.action_dim))
         if config.warm_start_time > 0.0:
             active = has_previous_action.astype(np.float32)[:, None]
             start_value = active * config.warm_start_time
             flow_init = (
                 1.0 - start_value
-            ) * pure_noise.numpy() + start_value * previous_action
+            ) * pure_noise + start_value * previous_action
             flow_start = start_value
         else:
             ## Since collect_rollout() is already NumPy-driven (env stepping, storage), consider generating pure_noise directly in NumPy (or using the existing rng) and only converting to Tensor once when calling policy.sample().
-            flow_init = pure_noise.numpy()
+            flow_init = pure_noise
             flow_start = np.zeros((batch_size, 1), dtype=np.float32)
 
         sample = trainer.policy.sample(

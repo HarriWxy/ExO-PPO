@@ -41,12 +41,29 @@ from .torch_models import (
 from .torch_objectives import direct_ratio_exo_loss, recent_policy_ofp_losses
 
 
+class _NullSummaryWriter:
+    """Small fallback so training still works without the optional TensorBoard."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    def add_scalar(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
 @dataclass(frozen=True)
 class TorchTrainConfig:
     env_id: str = "Walker2d-v5"
+    env_backend: str = "envpool" # gymnasium
     seed: int = 0
     total_steps: int = 1_000_000
-    num_envs: int = 4
+    num_envs: int = 16
     rollout_steps: int = 256
     replay_rollouts: int = 4
     warmup_rollouts: int = 4
@@ -84,6 +101,7 @@ class TorchTrainConfig:
     eval_episodes: int = 5
     stochastic_eval: bool = False
     device: str = "auto"
+    envpool_num_threads: int = 0
     log_dir: str = "logs"
     checkpoint_dir: str = ""
 
@@ -102,6 +120,12 @@ def parse_args(argv: Sequence[str] | None = None) -> TorchTrainConfig:
         description="PyTorch direct-ratio ExO-PPO + recent-policy one-step flow"
     )
     parser.add_argument("--env-id", default=TorchTrainConfig.env_id)
+    parser.add_argument(
+        "--env-backend",
+        choices=("gymnasium", "envpool"),
+        default=TorchTrainConfig.env_backend,
+        help="parallel environment implementation",
+    )
     parser.add_argument("--seed", type=int, default=TorchTrainConfig.seed)
     parser.add_argument("--total-steps", type=int, default=TorchTrainConfig.total_steps)
     parser.add_argument("--num-envs", type=int, default=TorchTrainConfig.num_envs)
@@ -225,6 +249,12 @@ def parse_args(argv: Sequence[str] | None = None) -> TorchTrainConfig:
     parser.add_argument(
         "--device", default=TorchTrainConfig.device, help="auto, cpu, cuda, or cuda:N"
     )
+    parser.add_argument(
+        "--envpool-num-threads",
+        type=int,
+        default=TorchTrainConfig.envpool_num_threads,
+        help="EnvPool worker threads; 0 uses EnvPool's batch-size default",
+    )
     parser.add_argument("--log-dir", default=TorchTrainConfig.log_dir)
     parser.add_argument("--checkpoint-dir", default=TorchTrainConfig.checkpoint_dir)
     args = parser.parse_args(argv)
@@ -234,6 +264,10 @@ def parse_args(argv: Sequence[str] | None = None) -> TorchTrainConfig:
 
 
 def validate_config(config: TorchTrainConfig) -> None:
+    if config.env_backend not in {"gymnasium", "envpool"}:
+        raise ValueError("env_backend must be 'gymnasium' or 'envpool'")
+    if config.envpool_num_threads < 0:
+        raise ValueError("envpool_num_threads must be non-negative")
     positive_integer_fields = (
         "total_steps",
         "num_envs",
@@ -294,8 +328,54 @@ def resolve_device(value: str) -> torch.device:
     return device
 
 
-def make_vector_env(env_id: str, num_envs: int) -> gym.vector.VectorEnv:
-    """Create a synchronous vector env with same-step autoreset when available."""
+def make_vector_env(
+    env_id: str,
+    num_envs: int,
+    *,
+    backend: str = "gymnasium",
+    seed: int = 0,
+    envpool_num_threads: int = 0,
+) -> Any:
+    """Create the fixed-width batched environment used by the collector.
+
+    ``envpool`` is deliberately created in synchronous mode by setting
+    ``batch_size == num_envs``.  EnvPool still executes the batch in its native
+    C++ thread pool, while the collector can keep one stable row per env for
+    GAE, warm-start actions and episode accounting.  The asynchronous EnvPool
+    API returns whichever env IDs finish first and would require a different
+    replay layout.
+    """
+
+    if backend == "envpool":
+        try:
+            import envpool
+        except ImportError as error:
+            raise RuntimeError(
+                "--env-backend envpool requires the optional 'envpool' package"
+            ) from error
+        kwargs: dict[str, Any] = {
+            "env_type": "gymnasium",
+            "num_envs": num_envs,
+            "batch_size": num_envs,
+            "seed": seed,
+        }
+        if envpool_num_threads > 0:
+            kwargs["num_threads"] = envpool_num_threads
+        try:
+            env = envpool.make(env_id, **kwargs)
+        except Exception as error:
+            raise RuntimeError(
+                f"EnvPool could not create {env_id!r}; check envpool.list_all_envs()"
+            ) from error
+        # Current EnvPool Gymnasium wrappers expose ``single_*`` aliases.  The
+        # run loop also falls back to ``observation_space``/``action_space`` for
+        # older wrappers, so no mutation of the extension object is needed here.
+        return env
+
+    if backend != "gymnasium":
+        raise ValueError("backend must be 'gymnasium' or 'envpool'")
+
+    # Gymnasium's synchronous vector env keeps a stable row per environment.
 
     factories: list[Callable[[], gym.Env[Any, Any]]] = [
         lambda env_id=env_id: gym.make(env_id) for _ in range(num_envs)
@@ -309,6 +389,18 @@ def make_vector_env(env_id: str, num_envs: int) -> gym.vector.VectorEnv:
         except TypeError:
             pass
     return gym.vector.SyncVectorEnv(factories)
+
+
+def reset_vector_env(env: Any, *, backend: str, seed: int) -> tuple[Any, Any]:
+    """Reset either backend while tolerating older EnvPool return conventions."""
+
+    if backend == "envpool":
+        result = env.reset()
+    else:
+        result = env.reset(seed=seed)
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    return result, {}
 
 
 def action_from_pre_tanh(
@@ -444,10 +536,11 @@ class Trainer:
             **ofp,
             "actor_loss": total_loss.detach(),
             "self_distill_loss": self_distill_loss.detach(),
-            "actor_grad_norm": torch.as_tensor(gradient_norm).detach(),
+            "actor_grad_norm": torch.as_tensor(
+                gradient_norm, dtype=torch.float32, device=self.device
+            ).detach(),
             "ema_decay": torch.as_tensor(ema_decay, device=self.device),
         }
-    # torch.as_tensor(gradient_norm) will create a CPU tensor by default when gradient_norm is a Python float, which can lead to mixed-device metrics dictionaries. Consider constructing these metric tensors on self.device (or returning plain Python floats consistently) to avoid accidental device mismatches in downstream consumers.
 
     def critic_train_step(
         self, observation: torch.Tensor, returns: torch.Tensor
@@ -465,7 +558,9 @@ class Trainer:
         self.critic_optimizer.step()
         return {
             "critic_loss": critic_loss.detach(),
-            "critic_grad_norm": torch.as_tensor(gradient_norm, device=self.device).detach(),
+            "critic_grad_norm": torch.as_tensor(
+                gradient_norm, device=self.device
+            ).detach(),
             "value_mean": prediction.detach().mean(),
         }
 
@@ -528,7 +623,7 @@ class Trainer:
 
 
 def collect_rollout(
-    env: gym.vector.VectorEnv,
+    env: Any,
     trainer: Trainer,
     observation: np.ndarray,
     observation_stats: RunningMeanStd,
@@ -738,9 +833,15 @@ def run(config: TorchTrainConfig) -> None:
     rng = np.random.default_rng(config.seed)
     device = resolve_device(config.device)
 
-    env = make_vector_env(config.env_id, config.num_envs)
-    observation_space = env.single_observation_space
-    action_space = env.single_action_space
+    env = make_vector_env(
+        config.env_id,
+        config.num_envs,
+        backend=config.env_backend,
+        seed=config.seed,
+        envpool_num_threads=config.envpool_num_threads,
+    )
+    observation_space = getattr(env, "single_observation_space", env.observation_space)
+    action_space = getattr(env, "single_action_space", env.action_space)
     if (
         not isinstance(observation_space, gym.spaces.Box)
         or len(observation_space.shape) != 1
@@ -759,7 +860,9 @@ def run(config: TorchTrainConfig) -> None:
     replay = ReplayWindow(config.replay_rollouts)
     observation_stats = RunningMeanStd((obs_dim,))
 
-    raw_observation, _ = env.reset(seed=config.seed)
+    raw_observation, _ = reset_vector_env(
+        env, backend=config.env_backend, seed=config.seed
+    )
     observation_stats.update(raw_observation)
     observation = observation_stats.normalize(raw_observation)
     episode_returns = np.zeros(config.num_envs, dtype=np.float64)
@@ -768,7 +871,10 @@ def run(config: TorchTrainConfig) -> None:
     has_previous_action = np.zeros(config.num_envs, dtype=bool)
 
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_name = f"{config.env_id}-torch-direct-ratio-recent-ofp-{timestamp}"
+    run_name = (
+        f"{config.env_id}-torch-{config.env_backend}-direct-ratio-recent-ofp-"
+        f"{timestamp}"
+    )
     log_path = Path(config.log_dir) / run_name
     log_path.mkdir(parents=True, exist_ok=True)
     (log_path / "config.json").write_text(
@@ -776,11 +882,12 @@ def run(config: TorchTrainConfig) -> None:
     )
     try:
         from torch.utils.tensorboard import SummaryWriter
-    except ImportError as error:  # pragma: no cover - optional only for training
-        env.close()
-        raise RuntimeError(
-            "torch.utils.tensorboard is required for the training entry point"
-        ) from error
+    except ImportError:  # pragma: no cover - depends on the local install
+        SummaryWriter = _NullSummaryWriter
+        print(
+            "warning: tensorboard is not installed; continuing without event logs",
+            flush=True,
+        )
     writer = SummaryWriter(log_dir=str(log_path))
 
     environment_steps = 0

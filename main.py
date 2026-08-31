@@ -1,5 +1,5 @@
 
-from flow.train import main
+from flow.torch_train import main
 
 
 if __name__ == "__main__":
