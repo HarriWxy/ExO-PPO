@@ -34,6 +34,14 @@
 │   │                        # 相对独立的连续动作 PPO 示例
 │   └── demo.py/example*.py/tests.py
 │                            # 演示、验证和探索性脚本
+├── flow/
+│   ├── train.py             # direct-ratio ExO-PPO + recent-policy OFP 入口
+│   ├── models.py            # interval-average one-step flow actor
+│   ├── objectives.py        # ExO ratio 与 OFP 自蒸馏目标
+│   ├── torch_train.py       # PyTorch 训练入口（同一方案）
+│   ├── torch_models.py      # PyTorch flow actor/value 网络
+│   ├── torch_objectives.py  # PyTorch ExO/OFP 目标
+│   └── README.md            # 方案公式、运行方式与消融说明
 ├── .gitignore
 └── README.md
 ```
@@ -48,6 +56,7 @@
 
 - Python、NumPy、SciPy、Numba
 - TensorFlow、Keras、TensorFlow Probability
+- PyTorch（运行 `flow.torch_train`）
 - Gymnasium
 - EnvPool（部分 Atari 和并行环境脚本）
 - MuJoCo 环境依赖
@@ -98,6 +107,12 @@ python Mujoco/MuPPO.py
 
 # 相对独立的连续动作 PPO 示例，默认使用 BipedalWalker-v2
 python Mujoco/ppo_keras_continuous.py
+
+# MuJoCo：direct-ratio ExO-PPO + recent-policy one-step flow
+python -m flow.train --env-id Walker2d-v5
+
+# PyTorch：同一方案，自动选择 CUDA（无 CUDA 时回退 CPU）
+python -m flow.torch_train --env-id Walker2d-v5 --device auto
 ```
 
 几个常用脚本及其默认环境如下：
@@ -111,6 +126,8 @@ python Mujoco/ppo_keras_continuous.py
 | `Mujoco/MuPPO.py` | `Humanoid-v5` | 连续动作 PPO 实验 |
 | `Mujoco/MuSACep.py` | `LunarLanderContinuous-v2` | 连续控制 SAC 实验 |
 | `Mujoco/ppo_keras_continuous.py` | `BipedalWalker-v2` | 相对独立的 PPO 参考实现 |
+| `flow/train.py` | `Walker2d-v5` | direct-ratio ExO-PPO + recent-policy one-step flow；详见 `flow/README.md` |
+| `flow/torch_train.py` | `Walker2d-v5` | PyTorch direct-ratio ExO-PPO + recent-policy one-step flow |
 
 ## GPU 和运行注意事项
 
