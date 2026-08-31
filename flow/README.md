@@ -153,6 +153,39 @@ python -m flow.torch_train \
   --eval-every-rollouts 999
 ```
 
+### Space Robotics Bench（Python 3.12）
+
+SRB 兼容层只使用本目录的 PyTorch 实现，不导入 TensorFlow，也不会创建第二个
+Gym/Isaac Sim 实例。先把本仓库以 editable 方式安装到 SRB 环境：
+
+```bash
+conda run --no-capture-output -n srb \
+  python -m pip install --no-deps --no-build-isolation -e /root/R2A/ExO-PPO
+```
+
+然后在 SRB 仓库中通过原生 CLI 训练：
+
+```bash
+cd /root/space_robotics_bench_l
+conda run --no-capture-output -n srb \
+  srb agent train --headless --algo exoppo \
+  --env locomotion_velocity_tracking_c \
+  env.num_envs=128 env.command_vis=false
+```
+
+评估时传入训练生成的 `model_<iteration>.pt`：
+
+```bash
+conda run --no-capture-output -n srb \
+  srb agent eval --algo exoppo \
+  --env locomotion_velocity_tracking_c \
+  --model /path/to/model_1499.pt
+```
+
+SRB 默认参数位于 `hyperparams/exoppo.yaml`。兼容层在 SRB 的 Torch device 上
+保存 rollout/replay，并保留 direct ratio 必需的 latent、pre-tanh action 和
+behavior log-probability；`truncated` 与真正的 `terminated` 也会分别进入 GAE。
+
 如果已安装 EnvPool，可以将采样后端切换为 C++ 批量环境池。这里固定
 `batch_size=num_envs` 使用同步批量 API，保持 GAE 和 replay 的环境行顺序：
 

@@ -51,6 +51,7 @@
 ## 环境要求
 
 建议使用独立的 Python 3.x 虚拟环境，并根据本机 CUDA、TensorFlow 和 Keras 版本选择兼容组合。
+PyTorch `flow` 包及其 SRB 接入支持 Python 3.12；TensorFlow 实验脚本仍需按各自依赖单独配置。
 
 代码中使用到的主要依赖包括：
 

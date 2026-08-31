@@ -11,5 +11,6 @@ __all__ = [
     "objectives",
     "torch_models",
     "torch_objectives",
+    "torch_buffer",
     "torch_train",
 ]

@@ -1,9 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "exo-ppo"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "torch",
     "torchvision",
@@ -11,6 +15,9 @@ dependencies = [
     "nvidia-ml-py",
     "tensorboard",
 ]
+
+[tool.setuptools]
+packages = ["flow"]
 
 
 [[tool.uv.index]]
@@ -26,4 +33,3 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu132" }
 torchvision = { index = "pytorch-cu132" }
-

@@ -12,13 +12,14 @@ each other.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import datetime as dt
 import json
-from pathlib import Path
 import random
 import time
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -32,6 +33,7 @@ from .buffer import (
     flatten_rollout,
     generalized_advantage_estimate,
 )
+from .torch_buffer import TorchReplayWindow
 from .torch_models import (
     IntervalFlowPolicy,
     ValueNetwork,
@@ -60,7 +62,7 @@ class _NullSummaryWriter:
 @dataclass(frozen=True)
 class TorchTrainConfig:
     env_id: str = "Walker2d-v5"
-    env_backend: str = "envpool" # gymnasium
+    env_backend: str = "envpool"  # gymnasium
     seed: int = 0
     total_steps: int = 1_000_000
     num_envs: int = 16
@@ -424,6 +426,7 @@ class Trainer:
         obs_dim: int,
         action_dim: int,
         device: torch.device | None = None,
+        critic_obs_dim: int | None = None,
     ) -> None:
         self.config = config
         self.device = device or resolve_device(config.device)
@@ -441,9 +444,13 @@ class Trainer:
             self.policy.one_step_mean(dummy_obs, dummy_noise)
         self.recent_policy = build_policy_copy(self.policy, trainable=False)
         self.ema_teacher = build_policy_copy(self.policy, trainable=False)
+        self.critic_obs_dim = int(critic_obs_dim or obs_dim)
         self.value = ValueNetwork(config.hidden_sizes).to(self.device)
+        dummy_critic_obs = torch.zeros(
+            (1, self.critic_obs_dim), dtype=torch.float32, device=self.device
+        )
         with torch.no_grad():
-            self.value(dummy_obs)
+            self.value(dummy_critic_obs)
 
         self.actor_optimizer = torch.optim.Adam(
             self.policy.parameters(), lr=config.actor_learning_rate, eps=1e-5
@@ -608,6 +615,59 @@ class Trainer:
                     self.config.target_kl > 0.0
                     and float(actor_metrics["recent_log_shift"].detach().cpu())
                     > self.config.target_kl
+                ):
+                    stop_early = True
+                    break
+            if stop_early:
+                break
+
+        averaged = {
+            key: value / max(metric_count, 1) for key, value in metric_sums.items()
+        }
+        averaged["early_stop"] = float(stop_early)
+        averaged["minibatches"] = float(metric_count)
+        return averaged
+
+    def train_torch_replay(self, replay: TorchReplayWindow) -> dict[str, float]:
+        """Train from a replay window that stays on the policy device."""
+
+        tensors = replay.tensors()
+        advantages = tensors["advantages"]
+        tensors["advantages"] = (advantages - advantages.mean()) / (
+            advantages.std(unbiased=False) + 1e-8
+        )
+
+        self.snapshot_recent_policy()
+        metric_sums: dict[str, float] = {}
+        metric_count = 0
+        sample_count = len(replay)
+        stop_early = False
+        for _ in range(self.config.update_epochs):
+            order = torch.randperm(sample_count, device=self.device)
+            for offset in range(0, sample_count, self.config.batch_size):
+                indices = order[offset : offset + self.config.batch_size]
+                actor_metrics = self.actor_train_step(
+                    tensors["actor_observations"][indices],
+                    tensors["pre_tanh_actions"][indices],
+                    tensors["flow_init"][indices],
+                    tensors["flow_start"][indices],
+                    tensors["behavior_log_prob"][indices],
+                    tensors["advantages"][indices],
+                )
+                critic_metrics = self.critic_train_step(
+                    tensors["critic_observations"][indices],
+                    tensors["returns"][indices],
+                )
+                for key, value in {**actor_metrics, **critic_metrics}.items():
+                    metric_sums[key] = metric_sums.get(key, 0.0) + float(
+                        value.detach()#.cpu()
+                    )
+                metric_count += 1
+
+                recent_shift = actor_metrics["recent_log_shift"]
+                if (
+                    self.config.target_kl > 0.0
+                    and float(recent_shift.detach().cpu()) > self.config.target_kl
                 ):
                     stop_early = True
                     break
