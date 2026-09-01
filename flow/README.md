@@ -112,7 +112,7 @@ L_actor = L_exo
 6. 更新在线策略后，再更新 EMA teacher。
 
 这套 replay 仍与原仓库的 ExO/GePPO 一样只修正动作分布，不修正旧 replay 的
-state-distribution shift；`replay_rollouts` 不宜设得很大。
+state-distribution shift；`replay_N` 不宜设得很大。
 
 ## 5. 运行
 
@@ -130,7 +130,7 @@ python -m flow.train \
   --total-steps 2048 \
   --num-envs 2 \
   --rollout-steps 64 \
-  --replay-rollouts 2 \
+  --replay-N 2 \
   --warmup-rollouts 2 \
   --update-epochs 1 \
   --batch-size 64 \
@@ -146,12 +146,38 @@ python -m flow.torch_train \
   --total-steps 2048 \
   --num-envs 2 \
   --rollout-steps 64 \
-  --replay-rollouts 2 \
+  --replay-N 2 \
   --warmup-rollouts 2 \
   --update-epochs 1 \
   --batch-size 64 \
   --eval-every-rollouts 999
 ```
+
+标准 PPO 对照版本使用相同的 flow policy、采样器、GAE、观测归一化、评估和
+TensorBoard 框架，仅将 actor 更新替换为标准 PPO clipped surrogate：
+
+```bash
+python -m flow.torch_ppo_train \
+  --env-id Walker2d-v5 \
+  --env-backend gymnasium \
+  --device auto \
+  --total-steps 2048 \
+  --num-envs 2 \
+  --rollout-steps 64 \
+  --replay-N 1 \
+  --warmup-rollouts 1 \
+  --update-epochs 1 \
+  --batch-size 64 \
+  --eval-every-rollouts 999
+```
+
+`--replay-N 1 --warmup-rollouts 1` 是严格的 on-policy PPO。若要与 ExO
+使用相同的 replay 窗口，将这两个参数改成 ExO 的配置值；此时应称为
+replay-compatible PPO。为保持 CLI 兼容，PPO 版本使用
+`--exo-clip-radius` 作为 PPO 的 epsilon，OFP/ExO 专用参数不会参与 PPO 损失。
+
+
+
 
 ### Space Robotics Bench（Python 3.12）
 
@@ -210,7 +236,7 @@ python -m flow.train \
   --total-steps 1000000 \
   --num-envs 4 \
   --rollout-steps 256 \
-  --replay-rollouts 4 \
+  --replay-N 4 \
   --warmup-rollouts 4 \
   --update-epochs 2 \
   --batch-size 256 \
@@ -235,7 +261,7 @@ tensorboard --logdir logs
 --guidance-mix 0
 
 # C. 退化为只使用最新 rollout
---replay-rollouts 1 --warmup-rollouts 1
+--replay-N 1 --warmup-rollouts 1
 
 # D. 单动作版 temporal warm start（默认关闭）
 --warm-start-time 0.15

@@ -12,14 +12,13 @@ each other.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, dataclass
 import datetime as dt
 import json
+from pathlib import Path
 import random
 import time
-from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 import gymnasium as gym
 import numpy as np
@@ -67,8 +66,8 @@ class TorchTrainConfig:
     total_steps: int = 1_000_000
     num_envs: int = 16
     rollout_steps: int = 256
-    replay_rollouts: int = 4
-    warmup_rollouts: int = 4
+    replay_N: int = 8
+    warmup_rollouts: int = replay_N
     update_epochs: int = 2
     batch_size: int = 256
     gamma: float = 0.99
@@ -135,7 +134,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TorchTrainConfig:
         "--rollout-steps", type=int, default=TorchTrainConfig.rollout_steps
     )
     parser.add_argument(
-        "--replay-rollouts", type=int, default=TorchTrainConfig.replay_rollouts
+        "--replay-N", type=int, default=TorchTrainConfig.replay_N
     )
     parser.add_argument(
         "--warmup-rollouts", type=int, default=TorchTrainConfig.warmup_rollouts
@@ -274,7 +273,7 @@ def validate_config(config: TorchTrainConfig) -> None:
         "total_steps",
         "num_envs",
         "rollout_steps",
-        "replay_rollouts",
+        "replay_N",
         "warmup_rollouts",
         "update_epochs",
         "batch_size",
@@ -286,8 +285,8 @@ def validate_config(config: TorchTrainConfig) -> None:
     for field in positive_integer_fields:
         if getattr(config, field) <= 0:
             raise ValueError(f"{field} must be positive")
-    if config.warmup_rollouts > config.replay_rollouts:
-        raise ValueError("warmup_rollouts cannot exceed replay_rollouts")
+    if config.warmup_rollouts > config.replay_N:
+        raise ValueError("warmup_rollouts cannot exceed replay_N")
     if not 0.0 <= config.condition_dropout < 1.0:
         raise ValueError("condition_dropout must be in [0, 1)")
     if not 0.0 <= config.warm_start_time < 1.0:
@@ -543,9 +542,7 @@ class Trainer:
             **ofp,
             "actor_loss": total_loss.detach(),
             "self_distill_loss": self_distill_loss.detach(),
-            "actor_grad_norm": torch.as_tensor(
-                gradient_norm, dtype=torch.float32, device=self.device
-            ).detach(),
+            "actor_grad_norm": gradient_norm.detach(),
             "ema_decay": torch.as_tensor(ema_decay, device=self.device),
         }
 
@@ -565,9 +562,7 @@ class Trainer:
         self.critic_optimizer.step()
         return {
             "critic_loss": critic_loss.detach(),
-            "critic_grad_norm": torch.as_tensor(
-                gradient_norm, device=self.device
-            ).detach(),
+            "critic_grad_norm": gradient_norm.detach(),
             "value_mean": prediction.detach().mean(),
         }
 
@@ -917,7 +912,7 @@ def run(config: TorchTrainConfig) -> None:
     obs_dim = int(observation_space.shape[0])
     action_dim = int(action_space.shape[0])
     trainer = Trainer(config, obs_dim, action_dim, device=device)
-    replay = ReplayWindow(config.replay_rollouts)
+    replay = ReplayWindow(config.replay_N)
     observation_stats = RunningMeanStd((obs_dim,))
 
     raw_observation, _ = reset_vector_env(
@@ -932,7 +927,7 @@ def run(config: TorchTrainConfig) -> None:
 
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     run_name = (
-        f"{config.env_id}-torch-{config.env_backend}-direct-ratio-recent-ofp-"
+        f"{config.env_id}/torch-{config.env_backend}-replayN:{config.replay_N}-ratio-recent-ofp-"
         f"{timestamp}"
     )
     log_path = Path(config.log_dir) / run_name
