@@ -542,6 +542,10 @@ class Trainer:
             **ofp,
             "actor_loss": total_loss.detach(),
             "self_distill_loss": self_distill_loss.detach(),
+            "clip_range": torch.as_tensor(
+                self.config.exo_clip_radius, device=self.device
+            ),
+            "std": self.policy.std().mean().detach(),
             "actor_grad_norm": gradient_norm.detach(),
             "ema_decay": torch.as_tensor(ema_decay, device=self.device),
         }
@@ -619,6 +623,16 @@ class Trainer:
         averaged = {
             key: value / max(metric_count, 1) for key, value in metric_sums.items()
         }
+        averaged["learning_rate"] = float(
+            self.actor_optimizer.param_groups[0]["lr"]
+        )
+        averaged["critic_learning_rate"] = float(
+            self.critic_optimizer.param_groups[0]["lr"]
+        )
+        averaged["value_loss"] = averaged.get("critic_loss", 0.0)
+        averaged["loss"] = averaged.get("actor_loss", 0.0) + averaged.get(
+            "critic_loss", 0.0
+        )
         averaged["early_stop"] = float(stop_early)
         averaged["minibatches"] = float(metric_count)
         return averaged
@@ -672,6 +686,16 @@ class Trainer:
         averaged = {
             key: value / max(metric_count, 1) for key, value in metric_sums.items()
         }
+        averaged["learning_rate"] = float(
+            self.actor_optimizer.param_groups[0]["lr"]
+        )
+        averaged["critic_learning_rate"] = float(
+            self.critic_optimizer.param_groups[0]["lr"]
+        )
+        averaged["value_loss"] = averaged.get("critic_loss", 0.0)
+        averaged["loss"] = averaged.get("actor_loss", 0.0) + averaged.get(
+            "critic_loss", 0.0
+        )
         averaged["early_stop"] = float(stop_early)
         averaged["minibatches"] = float(metric_count)
         return averaged
@@ -695,6 +719,7 @@ def collect_rollout(
     list[int],
     np.ndarray,
     np.ndarray,
+    float,
 ]:
     config = trainer.config
     observations: list[np.ndarray] = []
@@ -805,6 +830,12 @@ def collect_rollout(
         advantages,
         returns,
     )
+    return_variance = np.var(returns)
+    explained_variance = (
+        float(1.0 - np.var(returns - value_array) / return_variance)
+        if return_variance > 1.0e-8
+        else 0.0
+    )
     return (
         rollout,
         observation,
@@ -812,6 +843,7 @@ def collect_rollout(
         completed_lengths,
         previous_action,
         has_previous_action,
+        explained_variance,
     )
 
 
@@ -958,6 +990,7 @@ def run(config: TorchTrainConfig) -> None:
                 completed_lengths,
                 previous_action,
                 has_previous_action,
+                explained_variance,
             ) = collect_rollout(
                 env,
                 trainer,
@@ -977,12 +1010,13 @@ def run(config: TorchTrainConfig) -> None:
             metrics: dict[str, float] = {
                 "replay/samples": float(len(replay)),
                 "replay/rollouts": float(replay.rollout_count),
-                "time/steps_per_second": environment_steps
+                "time/fps": environment_steps
                 / max(time.monotonic() - started, 1e-6),
+                "train/explained_variance": explained_variance,
             }
             if completed_returns:
-                metrics["rollout/episode_return"] = float(np.mean(completed_returns))
-                metrics["rollout/episode_length"] = float(np.mean(completed_lengths))
+                metrics["rollout/ep_rew_mean"] = float(np.mean(completed_returns))
+                metrics["rollout/ep_len_mean"] = float(np.mean(completed_lengths))
 
             if replay.rollout_count >= config.warmup_rollouts:
                 train_metrics = trainer.train_replay(replay, rng)
@@ -1026,9 +1060,12 @@ def run(config: TorchTrainConfig) -> None:
                 for key, value in metrics.items()
                 if key
                 in {
-                    "rollout/episode_return",
+                    "rollout/ep_rew_mean",
                     "train/actor_loss",
                     "train/critic_loss",
+                    "train/loss",
+                    "train/approx_kl",
+                    "train/clip_fraction",
                     "train/ratio",
                     "train/recent_ratio",
                     "train/flow_loss",

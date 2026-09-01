@@ -97,6 +97,18 @@ class TorchBufferTests(unittest.TestCase):
         metrics = trainer.train_torch_replay(replay)
         self.assertIn("actor_loss", metrics)
         self.assertIn("critic_loss", metrics)
+        for metric_name in (
+            "approx_kl",
+            "clip_fraction",
+            "clip_range",
+            "entropy_loss",
+            "learning_rate",
+            "loss",
+            "policy_gradient_loss",
+            "std",
+            "value_loss",
+        ):
+            self.assertIn(metric_name, metrics)
         self.assertTrue(
             all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
         )

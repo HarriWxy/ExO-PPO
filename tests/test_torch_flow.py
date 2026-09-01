@@ -44,6 +44,13 @@ class TorchFlowObjectiveTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(result["ratio"]), 1.0, places=5)
         self.assertAlmostEqual(float(result["recent_ratio"]), 1.0, places=5)
+        for metric_name in (
+            "approx_kl",
+            "clip_fraction",
+            "entropy_loss",
+            "policy_gradient_loss",
+        ):
+            self.assertTrue(torch.isfinite(result[metric_name]))
 
     def test_policy_broadcasts_singleton_times_and_condition_masks(self) -> None:
         observation = torch.randn((4, 3))

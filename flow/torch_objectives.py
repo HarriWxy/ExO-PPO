@@ -89,19 +89,25 @@ def direct_ratio_exo_loss(
     direct_surrogate = ratio * advantage
     exo_surrogate = exo_ratio * advantage
     surrogate = torch.minimum(direct_surrogate, exo_surrogate)
+    policy_gradient_loss = -surrogate.mean()
     entropy = policy.conditional_entropy()
-    policy_loss = -surrogate.mean() - entropy_coefficient * entropy
+    entropy_loss = -entropy
+    policy_loss = policy_gradient_loss + entropy_coefficient * entropy_loss
     outside_recent_band = (ratio - recent_ratio).abs() > clip_radius
     return {
         "policy_loss": policy_loss,
+        "policy_gradient_loss": policy_gradient_loss,
         "ratio": ratio.mean(),
         "recent_ratio": recent_ratio.mean(),
         "ratio_abs_log": log_ratio.abs().mean(),
-        "approx_kl": (behavior_log_prob - current_log_prob).mean(),
+        # Same reverse-KL approximation used by Stable-Baselines3 PPO.
+        "approx_kl": ((ratio - 1.0) - log_ratio).mean(),
+        "behavior_kl": (behavior_log_prob - current_log_prob).mean(),
         "recent_approx_kl": (recent_log_prob - current_log_prob).mean(),
         "recent_log_shift": (recent_log_prob - current_log_prob).abs().mean(),
         "clip_fraction": outside_recent_band.float().mean(),
         "entropy": entropy,
+        "entropy_loss": entropy_loss,
     }
 
 
